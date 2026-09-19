@@ -1,0 +1,16 @@
+# systemd «service» مخصوص timer — فقط یک دوره اجرا می‌شود (--once)
+# نصب: به همراه tapsi-garage.timer.timer
+
+[Unit]
+Description=Tapsi Garage crawler (one-shot run for timer)
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tapsi-garage
+ExecStart=/usr/bin/python3 main.py daemon \
+    --city 1 \
+    --once \
+    --csv data/products.csv \
+    --json data/products.json
+# اگر خواستید بعد از هر دوره وضعیت سبد هم چک شود، --check-cart اضافه کنید

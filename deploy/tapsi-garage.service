@@ -1,0 +1,32 @@
+# systemd service — کرال ۲۴/۷ تپسی گاراژ
+# نصب: sudo cp deploy/tapsi-garage.service /etc/systemd/system/
+#       sudo systemctl daemon-reload && sudo systemctl enable --now tapsi-garage
+# لاگ: journalctl -u tapsi-garage -f
+
+[Unit]
+Description=Tapsi Garage crawler daemon (24/7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# مسیر نصب پروژه — مطابق سرور خودتان تغییر دهید
+WorkingDirectory=/opt/tapsi-garage
+ExecStart=/usr/bin/python3 main.py daemon \
+    --city 1 \
+    --interval 3600 \
+    --csv data/products.csv \
+    --json data/products.json
+Restart=always
+RestartSec=30
+
+# کاربر غیرروت (اختیاری ولی توصیه‌شده)
+# User=crawler
+# Group=crawler
+
+# جلوگیری از فشار بیش از حد به سرور مقصد در صورت کرش‌های پیاپی
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

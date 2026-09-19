@@ -1,0 +1,17 @@
+# systemd timer — اجرای دوره‌ای (هر ساعت، قابل تغییر)
+# نصب:
+#   sudo cp deploy/tapsi-garage.timer.service /etc/systemd/system/
+#   sudo cp deploy/tapsi-garage.timer.timer  /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now tapsi-garage.timer.timer
+
+[Unit]
+Description=Run Tapsi Garage crawler every hour
+
+[Timer]
+OnCalendar=hourly
+# یا دستی‌تر: OnCalendar=*-*-* 00/1:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
