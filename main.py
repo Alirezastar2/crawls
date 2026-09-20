@@ -132,10 +132,12 @@ def cmd_search(args) -> None:
         print("چیزی پیدا نشد.")
         return
     for r in rows:
-        price = f"{r['price']:,}" if r["price"] else "؟"
+        price = f"{r['price']:,}" if r["price"] else "۰"
+        # قیمت صفر = از فروش حذف شده (سیگنال مطمئن سرور)
+        avail = "" if r["price"] else " ⛔ ناموجود"
+        active_note = " (غیرفعال)" if r["is_active"] == 0 else ""
         print(f"[{r['id']}] {r['title']} — {price} تومان "
-              f"({r['category_title'] or 'بدون دسته'})"
-              + ("" if r["is_active"] else " (غیرفعال)"))
+              f"({r['category_title'] or 'بدون دسته'}){avail}{active_note}")
 
 
 def cmd_stats(args) -> None:
@@ -404,12 +406,18 @@ def cmd_changes(args) -> None:
                   " محصولی در کرال بعدی قیمت متفاوتی داشته باشد.")
             return
         for r in rows:
-            diff = (r["new_price"] or 0) - (r["old_price"] or 0)
-            arrow = "▲" if diff > 0 else "▼"
-            pct = (abs(diff) / r["old_price"] * 100) if r["old_price"] else 0
+            old_p, new_p = r["old_price"] or 0, r["new_price"] or 0
+            if new_p == 0 and old_p > 0:
+                note = "⛔ ناموجود شد (قیمت صفر = حذف از فروش)"
+            elif old_p == 0 and new_p > 0:
+                note = "🟢 موجود شد (بازگشت به فروش)"
+            else:
+                diff = new_p - old_p
+                arrow = "▲" if diff > 0 else "▼"
+                pct = (abs(diff) / old_p * 100) if old_p else 0
+                note = f"{arrow} {abs(diff):,} تومان ({pct:.1f}%)"
             print(f"[{r['ts'][:19]}] {r.get('product_title') or r['product_id']}: "
-                  f"{r['old_price']:,} → {r['new_price']:,} تومان "
-                  f"({arrow} {abs(diff):,} | {pct:.1f}%)")
+                  f"{old_p:,} → {new_p:,} تومان — {note}")
     finally:
         store.close()
 

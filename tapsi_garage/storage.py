@@ -126,7 +126,9 @@ class ProductStore:
                 brand_id=excluded.brand_id, price=excluded.price,
                 market_price=excluded.market_price,
                 image_file=excluded.image_file, image_url=excluded.image_url,
-                is_package=excluded.is_package, is_active=excluded.is_active,
+                is_package=excluded.is_package,
+                # اگر سرور isActive نفرستاد (NULL) مقدار قبلی حفظ شود
+                is_active=COALESCE(excluded.is_active, products.is_active),
                 is_virtual=excluded.is_virtual, services=excluded.services,
                 specifications=excluded.specifications,
                 min_order=excluded.min_order, max_order=excluded.max_order,
@@ -141,7 +143,9 @@ class ProductStore:
                 p.get("brandId"), p.get("price"), p.get("marketPrice"),
                 (p.get("image") if isinstance(p.get("image"), str) else None),
                 p.get("_imageUrl"), int(bool(p.get("isPackage"))),
-                int(bool(p.get("isActive"))), int(bool(p.get("isVirtual"))),
+                # اگر سرور فیلد نفرستاد None بماند تا مقدار قبلی حفظ شود
+                (p.get("isActive") if p.get("isActive") is not None else None),
+                int(bool(p.get("isVirtual"))),
                 json.dumps(p.get("services") or [], ensure_ascii=False),
                 json.dumps(p.get("specifications") or {}, ensure_ascii=False),
                 p.get("minOrder"), p.get("maxOrder"), p.get("description"),
