@@ -470,9 +470,12 @@ def cmd_daemon(args) -> None:
                     subcategory_ids=args.subcategories,
                     pages=args.pages, page_size=args.page_size,
                 )
-                log.info("دورهٔ %d: %d محصول (%d جدید) در %d صفحه — %.1f ثانیه",
+                save_err = result.get("save_errors") or 0
+                log.info("دورهٔ %d: %d محصول (%d جدید) در %d صفحه — %.1f ثانیه%s",
                          cycle, result["total"], result["new"], result["pages"],
-                         (_dt.now() - started).total_seconds())
+                         (_dt.now() - started).total_seconds(),
+                         (f" | ⚠ {save_err} ذخیره نشد: "
+                          f"{result.get('first_save_error', '')}") if save_err else "")
                 if args.csv:
                     store.export_csv(args.csv, delimiter=args.csv_delimiter)
                 if args.json:

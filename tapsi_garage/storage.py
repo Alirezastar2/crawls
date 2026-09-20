@@ -110,6 +110,8 @@ class ProductStore:
                  int(new_price), int(old["market_price"] or 0),
                  int(new_market or 0)),
             )
+        # نکته: اگر سرور isActive نفرستاد (NULL) مقدار قبلی حفظ می‌شود
+        # (COALESCE در ON CONFLICT پایین)
         self.conn.execute(
             """
             INSERT INTO products (
@@ -127,7 +129,6 @@ class ProductStore:
                 market_price=excluded.market_price,
                 image_file=excluded.image_file, image_url=excluded.image_url,
                 is_package=excluded.is_package,
-                # اگر سرور isActive نفرستاد (NULL) مقدار قبلی حفظ شود
                 is_active=COALESCE(excluded.is_active, products.is_active),
                 is_virtual=excluded.is_virtual, services=excluded.services,
                 specifications=excluded.specifications,

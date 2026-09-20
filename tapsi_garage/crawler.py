@@ -32,6 +32,8 @@ def crawl_products(
                              subcategory_ids, page_size)
     total_products = 0
     new_products = 0
+    save_errors = 0
+    first_save_error = ""
     page = 1
     last_page = 1
     empty_retries = 0
@@ -65,8 +67,12 @@ def crawl_products(
                     if store.upsert_product(p):
                         new_products += 1
                     total_products += 1
-                except Exception:
-                    # محصول معیوب نباید کل کرال را متوقف کند
+                except Exception as exc:
+                    # محصول معیوب نباید کل کرال را متوقف کند، اما
+                    # خطای ذخیره‌سازی نباید بی‌صدا بماند (درس امروز!)
+                    save_errors += 1
+                    if save_errors == 1:
+                        first_save_error = f"{type(exc).__name__}: {exc}"
                     continue
 
             if page % save_every == 0:
@@ -81,8 +87,16 @@ def crawl_products(
             time.sleep(config.CRAWL_DELAY)
 
         store.commit()
-        store.finish_run(run_id, page, total_products, new_products, "done")
-        return {"pages": page, "total": total_products, "new": new_products}
+        store.finish_run(run_id, page, total_products, new_products,
+                         "done" if not save_errors else
+                         f"done ({save_errors} save errors)")
+        if save_errors:
+            import logging
+            logging.getLogger("daemon").error(
+                "⚠ %d محصول ذخیره نشد! اولین خطا: %s", save_errors, first_save_error)
+        return {"pages": page, "total": total_products, "new": new_products,
+                "save_errors": save_errors,
+                "first_save_error": first_save_error}
     except (TapsiGarageError, KeyboardInterrupt) as exc:
         store.commit()
         store.finish_run(run_id, page, total_products, new_products,
