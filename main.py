@@ -445,7 +445,16 @@ def cmd_demand(args) -> None:
             print(f"  [{r['ts'][11:16]}] {r['product_title']} "
                   f"(قیمت: {r['new_price']:,} تومان)")
         print(f"\n💰 تغییر قیمت واقعی: {len(pch)} مورد")
-        if not sold and not restock and not pch:
+
+        # 🔥 سریع‌ترین فروش‌ها (بازگشت → اتمام، برای کل بازار)
+        hot = store.sellout_speed(hours=max(args.hours, 48))
+        if hot:
+            print(f"\n🔥 سریع‌ترین فروش‌ها (برگشت تا تمام‌شدن، کل بازار):")
+            for r in hot[:args.top]:
+                print(f"  {r['title'][:48]} — تنها {r['hours_alive']} ساعت"
+                      f" دوید! (قیمت {r['price']:,} تومان)")
+
+        if not sold and not restock and not pch and not hot:
             print("(در این بازه رخدادی نبوده — دیمن باید چند دوره اجرا شده باشد)")
     finally:
         store.close()
@@ -669,6 +678,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--hours", type=int, default=24, help="بازهٔ بررسی به ساعت")
     p.add_argument("--top", type=int, default=15, help="چند مورد در هر گروه نشان داده شود")
     p.set_defaults(func=cmd_demand)
+    # sellout_speed خودش از داخل cmd_demand صدا زده می‌شود (بازهٔ گسترده‌تر)
 
     p = sub.add_parser("daemon", help="کرال دوره‌ای ۲۴/۷ برای سرور")
     p.add_argument("--city", type=int, default=1)

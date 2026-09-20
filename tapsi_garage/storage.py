@@ -284,6 +284,44 @@ class ProductStore:
             "price_changes": [dict(r) for r in price_changes],
         }
 
+    def sellout_speed(self, hours: int = 48) -> list[dict]:
+        """محصولاتی که در بازه به فروش برگشتند و سپس ناموش شدند.
+
+        «مدت ماندگاری در فروش» = فاصلهٔ بازگشت تا اتمام — هرچه کمتر،
+        تقاضای کل بازار بیشتر (برای همهٔ کاربران سایت، نه فقط شما).
+        """
+        from datetime import timedelta, datetime as _dt
+        cutoff = (_dt.now(timezone.utc)
+                  - timedelta(hours=hours)).isoformat()
+        rows = self.conn.execute(
+            "SELECT ts, product_id, product_title, old_price, new_price"
+            " FROM price_history WHERE ts >= ?"
+            " ORDER BY product_id, ts", (cutoff,),
+        ).fetchall()
+        by_product: dict[str, list] = {}
+        for r in rows:
+            by_product.setdefault(r["product_id"], {
+                "title": r["product_title"], "events": [],
+            })["events"].append(
+                (datetime.fromisoformat(r["ts"]),
+                 r["old_price"] or 0, r["new_price"] or 0)
+            )
+        out = []
+        for pid, info in by_product.items():
+            evs = info["events"]
+            for i in range(1, len(evs)):
+                prev, cur = evs[i - 1], evs[i]
+                if prev[1] == 0 and prev[2] > 0 and cur[1] > 0 and cur[2] == 0:
+                    hours_alive = (cur[0] - prev[0]).total_seconds() / 3600
+                    out.append({
+                        "product_id": pid, "title": info["title"],
+                        "hours_alive": round(hours_alive, 1),
+                        "price": cur[1],
+                        "sold_out_at": cur[0].isoformat(),
+                    })
+        out.sort(key=lambda d: d["hours_alive"])
+        return out
+
     def close(self) -> None:
         self.conn.close()
 
