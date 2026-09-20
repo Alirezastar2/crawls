@@ -422,6 +422,35 @@ def cmd_changes(args) -> None:
         store.close()
 
 
+def cmd_demand(args) -> None:
+    """برآورد تقاضا: نزدیک‌ترین سیگنال عمومی به «چند نفر به سبد اضافه کردند».
+
+    تعداد سبدهای دیگران خصوصی است و از هیچ API در دسترس نیست؛ اما رخداد
+    «ناموجود شدن» یعنی کالا واقعاً خریده/رزرو شده — این ابزار همان را گزارش می‌کند.
+    """
+    if not DB_PATH.exists():
+        print("دیتابیس موجود نیست — اول کرال کن.")
+        return
+    store = ProductStore(DB_PATH)
+    try:
+        s = store.demand_summary(hours=args.hours)
+        sold, restock, pch = s["sold_out"], s["restocked"], s["price_changes"]
+        print(f"ـ برآورد تقاضا در {args.hours} ساعت گذشته ِ")
+        print(f"\n⛔ ناموش شد (خریده/ظرفیت رفت): {len(sold)} محصول")
+        for r in sold[:args.top]:
+            print(f"  [{r['ts'][11:16]}] {r['product_title']} "
+                  f"(آخرین قیمت: {r['old_price']:,} تومان)")
+        print(f"\n🟢 به فروش برگشت: {len(restock)} محصول")
+        for r in restock[:args.top]:
+            print(f"  [{r['ts'][11:16]}] {r['product_title']} "
+                  f"(قیمت: {r['new_price']:,} تومان)")
+        print(f"\n💰 تغییر قیمت واقعی: {len(pch)} مورد")
+        if not sold and not restock and not pch:
+            print("(در این بازه رخدادی نبوده — دیمن باید چند دوره اجرا شده باشد)")
+    finally:
+        store.close()
+
+
 def cmd_daemon(args) -> None:
     """حالت ۲۴/۷ برای سرور: کرال دوره‌ای + خروجی CSV/JSON + ثبت تغییر قیمت.
 
@@ -635,6 +664,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("changes", help="آخرین تغییرات قیمت ثبت‌شده")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_changes)
+
+    p = sub.add_parser("demand", help="برآورد تقاضا: ناموشی‌ها و بازگشت‌ها (proxy سبدهای دیگران)")
+    p.add_argument("--hours", type=int, default=24, help="بازهٔ بررسی به ساعت")
+    p.add_argument("--top", type=int, default=15, help="چند مورد در هر گروه نشان داده شود")
+    p.set_defaults(func=cmd_demand)
 
     p = sub.add_parser("daemon", help="کرال دوره‌ای ۲۴/۷ برای سرور")
     p.add_argument("--city", type=int, default=1)

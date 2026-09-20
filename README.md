@@ -114,6 +114,7 @@ python main.py cart clear --city 1
 python main.py cart report          # چقدر به سبدِ سرور اضافه شده + لاگ محلی
 python main.py cart history         # تاریخچهٔ کامل تلاش‌های افزودن
 python main.py changes              # تغییرات قیمت (نتیجهٔ کرال‌های دوره‌ای)
+python main.py demand --hours 24    # برآورد تقاضا: چه چیزهایی فروش رفت/برگشت
 
 # ── کرال ۲۴/۷ روی سرور ──
 python main.py daemon --city 1 --interval 3600 --csv data/products.csv --json data/products.json
@@ -187,6 +188,9 @@ tapsi-garage-crawler/
 
 - هر `cart add` در جدول `add_log` ثبت می‌شود (نتیجه، پیام سرور، فروشنده، تاریخ/شیفت).
 - `python main.py cart report` → وضعیت زندهٔ سبد روی سرور (اقلام + قیمت کل + تخفیف)
+- `python main.py demand --hours 24` → **برآورد تقاضای بازار**: تعداد سبدهای دیگران
+  خصوصی است و از هیچ API در دسترس نیست؛ نزدیک‌ترین سیگنال عمومی، رخدادهای
+  «ناموش شد» (خریده شد) و «به فروش برگشت» است که دیمن خودکار ثبت می‌کند.
   + خلاصهٔ تلاش‌ها (چند موفق/ناموفق).
 - `python main.py cart history` → تاریخچهٔ کامل.
 - نکته: شمارش سرور جهانی است ولی هر سبد مهمان به یک شهر گره خورده (بالا توضیح دادم).

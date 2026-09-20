@@ -253,6 +253,37 @@ class ProductStore:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def demand_summary(self, hours: int = 24) -> dict:
+        """برآورد تقاضا از روی رخدادهای موجودی (proxy برای «چند نفر خریده‌اند»).
+
+        - sold_out:  محصولاتی که در بازه ناموجود شدند (خریده/ظرفیت تمام شد)
+        - restocked: محصولاتی که به فروش برگشتند
+        - price_changes: تغییر قیمت‌های واقعی
+        """
+        from datetime import timedelta
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(hours=hours)).isoformat()
+        sold_out = self.conn.execute(
+            "SELECT ts, product_id, product_title, old_price FROM price_history"
+            " WHERE ts >= ? AND new_price = 0 AND old_price > 0"
+            " ORDER BY ts DESC", (cutoff,),
+        ).fetchall()
+        restocked = self.conn.execute(
+            "SELECT ts, product_id, product_title, new_price FROM price_history"
+            " WHERE ts >= ? AND old_price = 0 AND new_price > 0"
+            " ORDER BY ts DESC", (cutoff,),
+        ).fetchall()
+        price_changes = self.conn.execute(
+            "SELECT ts, product_id, product_title, old_price, new_price"
+            " FROM price_history WHERE ts >= ? AND old_price > 0 AND new_price > 0"
+            " ORDER BY ts DESC", (cutoff,),
+        ).fetchall()
+        return {
+            "sold_out": [dict(r) for r in sold_out],
+            "restocked": [dict(r) for r in restocked],
+            "price_changes": [dict(r) for r in price_changes],
+        }
+
     def close(self) -> None:
         self.conn.close()
 
