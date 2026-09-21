@@ -112,7 +112,10 @@ class Cart:
                 continue
             if vendor_id:
                 vendor = next((v for v in vendors if v.get("id") == vendor_id), None)
-            vendor = vendor or vendors[0]
+                if vendor is None:
+                    continue
+            else:
+                vendor = vendors[0]
             used_service = st
             break
 
@@ -120,9 +123,10 @@ class Cart:
             return AddResult(
                 ok=False, product_id=product_id, service_type=service_type,
                 message=(
-                    "هیچ فروشنده‌ای برای این محصول (با سرویس‌های delivery/service) "
-                    "در این شهر پیدا نشد. اگر محصول فقط «ارسال پستی» (shipment) "
-                    "دارد، ثبت آدرس و معمولاً لاگین لازم است."
+                    f"فروشندهٔ درخواستی ({vendor_id}) برای این محصول/سرویس یافت نشد."
+                    if vendor_id else
+                    "هیچ فروشنده‌ای برای این محصول و سرویس‌های درخواستی "
+                    "در این شهر پیدا نشد. سرویس ارسال پستی ممکن است آدرس و لاگین بخواهد."
                 ),
             )
 

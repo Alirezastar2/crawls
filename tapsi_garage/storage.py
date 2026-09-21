@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sqlite3
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,6 +21,8 @@ class ProductStore:
         self.path = Path(db_path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = sqlite3.connect(self.path)
+        # کرال و برداشت فروش ممکن است هم‌زمان به یک دیتابیس بنویسند.
+        self.conn.execute("PRAGMA busy_timeout=30000")
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
@@ -83,6 +87,16 @@ class ProductStore:
                 old_market_price INTEGER, new_market_price INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_price_history_ts ON price_history(ts);
+            CREATE TABLE IF NOT EXISTS sale_snapshots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                captured_at TEXT NOT NULL,
+                city_id INTEGER NOT NULL,
+                product_id TEXT NOT NULL,
+                product_title TEXT NOT NULL,
+                sale_count INTEGER NOT NULL CHECK(sale_count >= 0)
+            );
+            CREATE INDEX IF NOT EXISTS idx_sale_snapshots_product
+                ON sale_snapshots(city_id, product_id, id);
             """
         )
         self.conn.commit()
@@ -201,6 +215,58 @@ class ProductStore:
 
     def commit(self) -> None:
         self.conn.commit()
+
+    def products_for_sale_snapshot(self, city_id: int, limit: int | None = None) -> list[dict]:
+        """محصولات همین شهر، شامل کالاهای فعلاً ناموجود."""
+        sql = ("SELECT id, title FROM products "
+               "WHERE json_extract(raw, '$.cityId') = ? ORDER BY id")
+        params: tuple = (city_id,)
+        if limit is not None:
+            sql += " LIMIT ?"
+            params += (limit,)
+        return [dict(row) for row in self.conn.execute(sql, params)]
+
+    def save_sale_snapshot(self, city_id: int, product_id: str,
+                           title: str, sale_count: int) -> None:
+        if isinstance(sale_count, bool) or not isinstance(sale_count, int) or sale_count < 0:
+            raise ValueError("saleCount must be a non-negative integer")
+        self.conn.execute(
+            "INSERT INTO sale_snapshots "
+            "(captured_at, city_id, product_id, product_title, sale_count) "
+            "VALUES (?,?,?,?,?)",
+            (datetime.now(timezone.utc).isoformat(), city_id, product_id,
+             title, sale_count),
+        )
+
+    def sale_deltas(self, city_id: int) -> list[dict]:
+        """تفاضل آخرین و اولین شمارندهٔ فروش برای هر کالا در همین شهر."""
+        rows = self.conn.execute(
+            "SELECT product_id, product_title, sale_count, captured_at "
+            "FROM sale_snapshots WHERE city_id = ? ORDER BY product_id, id",
+            (city_id,),
+        )
+        first: dict[str, dict] = {}
+        last: dict[str, dict] = {}
+        count: dict[str, int] = {}
+        for row in rows:
+            pid = row["product_id"]
+            first.setdefault(pid, dict(row))
+            last[pid] = dict(row)
+            count[pid] = count.get(pid, 0) + 1
+        result = []
+        for pid, start in first.items():
+            if count[pid] < 2:
+                continue
+            end = last[pid]
+            result.append({
+                "product_id": pid, "title": end["product_title"],
+                "first_count": start["sale_count"],
+                "last_count": end["sale_count"],
+                "delta": end["sale_count"] - start["sale_count"],
+                "first_at": start["captured_at"], "last_at": end["captured_at"],
+                "samples": count[pid],
+            })
+        return sorted(result, key=lambda row: row["delta"], reverse=True)
 
     # ─── گزارش افزودن به سبد (add_log) ───────────────────────────
     def log_add(self, guest_id: str, city_id: int, product_id: str,
@@ -379,8 +445,21 @@ class ProductStore:
         out = Path(out_path)
         out.parent.mkdir(parents=True, exist_ok=True)
         data = self._export_rows()
-        out.write_text(json.dumps(data, ensure_ascii=False, indent=2),
-                       encoding="utf-8")
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", newline="", delete=False,
+                dir=out.parent, prefix=f".{out.name}.", suffix=".tmp",
+            ) as temp:
+                temp_path = Path(temp.name)
+                json.dump(data, temp, ensure_ascii=False, indent=2)
+                temp.flush()
+                os.fsync(temp.fileno())
+            os.replace(temp_path, out)
+        except Exception:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            raise
         return out
 
     def export_csv(self, out_path: str | Path, delimiter: str = ",") -> Path:
@@ -393,15 +472,28 @@ class ProductStore:
         out = Path(out_path)
         out.parent.mkdir(parents=True, exist_ok=True)
         data = self._export_rows()
-        with out.open("w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f, delimiter=delimiter)
-            writer.writerow(self.EXPORT_COLUMNS)
-            for d in data:
-                row = []
-                for k in self.EXPORT_COLUMNS:
-                    v = d[k]
-                    if isinstance(v, (list, dict)):
-                        v = json.dumps(v, ensure_ascii=False)
-                    row.append(v)
-                writer.writerow(row)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8-sig", newline="", delete=False,
+                dir=out.parent, prefix=f".{out.name}.", suffix=".tmp",
+            ) as temp:
+                temp_path = Path(temp.name)
+                writer = csv.writer(temp, delimiter=delimiter)
+                writer.writerow(self.EXPORT_COLUMNS)
+                for d in data:
+                    row = []
+                    for k in self.EXPORT_COLUMNS:
+                        v = d[k]
+                        if isinstance(v, (list, dict)):
+                            v = json.dumps(v, ensure_ascii=False)
+                        row.append(v)
+                    writer.writerow(row)
+                temp.flush()
+                os.fsync(temp.fileno())
+            os.replace(temp_path, out)
+        except Exception:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
+            raise
         return out

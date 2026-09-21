@@ -200,7 +200,9 @@ class TapsiGarageClient:
             item = dict(pd)
             item["_imageUrl"] = config.image_url(pd.get("image"))
             products.append(item)
-        pagination = data.get("pagination") or payload.get("pagination") or {}
+        pagination = data.get("pagination") or (
+            payload.get("pagination") if isinstance(payload, dict) else None
+        ) or {}
         return {"products": products, "pagination": pagination}
 
     # ─── جزئیات محصول / فروشنده‌ها / شیفت‌ها ──────────────────────

@@ -50,17 +50,30 @@ def crawl_products(
             last_page = int(pagination.get("lastPage") or 1)
             total = int(pagination.get("total") or 0)
 
-            # مقاوم‌سازی: صفحهٔ اولِ خالی در حالی که total > 0 است،
-            # معمولاً خطای گذرا (محدودسازی لحظه‌ای) است → چند بار تلاش مجدد
-            if not products and page == 1 and total > 0:
+            # کاتالوگِ کاملِ شهری که قبلاً محصول داشته، ناگهان صفر نمی‌شود؛
+            # پاسخ صفر معمولاً خطای موقت API است و نباید کرال موفق ثبت شود.
+            if (page == 1 and not products and total == 0 and
+                    category_id is None and not subcategory_ids and not extra_filters and
+                    store.products_for_sale_snapshot(city_id, limit=1)):
                 empty_retries += 1
                 if empty_retries <= MAX_EMPTY_RETRIES:
                     time.sleep(config.RETRY_BACKOFF ** empty_retries)
                     continue
                 raise TapsiGarageError(
-                    f"صفحهٔ اول خالی برگشت با اینکه total={total} است —"
+                    "کاتالوگ شهر با وجود محصولات ذخیره‌شده، خالی برگشت."
+                )
+
+            # صفحهٔ خالیِ غیرمنتظره در هر جای کرال نباید اجرای ناقص را موفق کند.
+            if not products and (total > 0 and page <= last_page):
+                empty_retries += 1
+                if empty_retries <= MAX_EMPTY_RETRIES:
+                    time.sleep(config.RETRY_BACKOFF ** empty_retries)
+                    continue
+                raise TapsiGarageError(
+                    f"صفحهٔ {page} خالی برگشت با اینکه total={total} است —"
                     " احتمالاً محدودیت موقت سرور؛ بعداً دوباره تلاش کنید."
                 )
+            empty_retries = 0
 
             for p in products:
                 try:
@@ -80,25 +93,29 @@ def crawl_products(
             if on_page:
                 on_page(page, len(products), total, new_products)
 
-            # شرط پایان: همهٔ صفحات یا محدودیت کاربر یا صفحهٔ خالی (پایان طبیعی)
+            # شرط پایان: همهٔ صفحات، محدودیت کاربر یا کاتالوگ واقعاً خالی
             if (pages is not None and page >= pages) or page >= last_page or not products:
                 break
             page += 1
             time.sleep(config.CRAWL_DELAY)
 
+        if save_errors:
+            raise TapsiGarageError(
+                f"ذخیرهٔ {save_errors} محصول ناموفق بود؛ اولین خطا: "
+                f"{first_save_error}"
+            )
+        if pages is None and total > 0 and total_products < total:
+            raise TapsiGarageError(
+                f"کرال ناقص است: {total_products} محصول از {total} محصول دریافت شد."
+            )
         store.commit()
         store.finish_run(run_id, page, total_products, new_products,
-                         "done" if not save_errors else
-                         f"done ({save_errors} save errors)")
-        if save_errors:
-            import logging
-            logging.getLogger("daemon").error(
-                "⚠ %d محصول ذخیره نشد! اولین خطا: %s", save_errors, first_save_error)
+                         "done")
         return {"pages": page, "total": total_products, "new": new_products,
                 "save_errors": save_errors,
                 "first_save_error": first_save_error}
-    except (TapsiGarageError, KeyboardInterrupt) as exc:
+    except (Exception, KeyboardInterrupt) as exc:
         store.commit()
         store.finish_run(run_id, page, total_products, new_products,
-                         f"aborted: {exc}"[:200])
+                         f"aborted: {type(exc).__name__}: {exc}"[:200])
         raise

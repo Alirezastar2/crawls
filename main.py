@@ -28,6 +28,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import sys
 import time
@@ -47,6 +48,13 @@ from tapsi_garage.storage import ProductStore
 DATA_DIR = Path("data")
 DB_PATH = DATA_DIR / "products.db"
 SESSION_PATH = DATA_DIR / "session.json"
+
+
+def cli_path(value: str) -> Path:
+    """مسیر CLI را از نویسه‌های نامرئی جهت متنِ ناشی از copy/paste پاک می‌کند."""
+    cleaned = value.translate({codepoint: None for codepoint in range(0x2066, 0x206A)})
+    # نقطه/فاصلهٔ انتهایی در مسیر فایل ویندوز معتبر و قابل‌اعتماد نیست.
+    return Path(cleaned.rstrip(". "))
 
 
 def _print(data, pretty: bool = True) -> None:
@@ -99,6 +107,7 @@ def cmd_crawl(args) -> None:
         print(f"  صفحه {page}: {fetched} محصول در این صفحه "
               f"(جمع: {total}، جدید: {new})")
 
+    completed = False
     try:
         result = crawl_products(
             client, store,
@@ -110,16 +119,20 @@ def cmd_crawl(args) -> None:
         )
         print(f"تمام شد ✓ — {result['pages']} صفحه، "
               f"{result['total']} محصول ({result['new']} محصول جدید)")
+        completed = True
     finally:
-        stats = store.stats()
-        print(f"دیتابیس: {stats['total']} محصول در {DB_PATH}")
-        if args.json:
-            out = store.export_json(args.json)
-            print(f"خروجی JSON: {out}")
-        if args.csv:
-            out = store.export_csv(args.csv, delimiter=args.csv_delimiter)
-            print(f"خروجی CSV: {out}")
-        store.close()
+        try:
+            stats = store.stats()
+            print(f"دیتابیس: {stats['total']} محصول در {DB_PATH}")
+            if completed:
+                if args.json:
+                    out = store.export_json(args.json)
+                    print(f"خروجی JSON: {out}")
+                if args.csv:
+                    out = store.export_csv(args.csv, delimiter=args.csv_delimiter)
+                    print(f"خروجی CSV: {out}")
+        finally:
+            store.close()
 
 
 def cmd_search(args) -> None:
@@ -165,6 +178,77 @@ def cmd_export(args) -> None:
             print(f"✓ خروجی JSON: {out}")
         if not args.csv and not args.json:
             print("مسیر خروجی بده: --csv data/products.csv و/یا --json data/products.json")
+    finally:
+        store.close()
+
+
+def cmd_sales_snapshot(args) -> None:
+    """برداشت شمارندهٔ تجمعی فروش از جزئیات هر محصول."""
+    if not DB_PATH.exists():
+        print("دیتابیس موجود نیست — اول یک کرال کامل انجام بده.")
+        return
+    if args.delay < 0 or (args.limit is not None and args.limit < 1):
+        raise ValueError("--delay باید نامنفی و --limit باید مثبت باشد")
+    store = ProductStore(DB_PATH)
+    client = TapsiGarageClient(session_file=SESSION_PATH)
+    try:
+        products = store.products_for_sale_snapshot(args.city, args.limit)
+        print(f"برداشت saleCount برای {len(products)} محصول شهر {args.city} شروع شد.")
+        saved = failed = missing = 0
+        for index, product in enumerate(products, 1):
+            try:
+                detail = client.get_product_detail(product["id"], args.city)
+                sale_count = detail.get("saleCount")
+                if isinstance(sale_count, bool) or not isinstance(sale_count, int) or sale_count < 0:
+                    missing += 1
+                else:
+                    store.save_sale_snapshot(args.city, product["id"],
+                                             product["title"], sale_count)
+                    saved += 1
+            except TapsiGarageError as exc:
+                failed += 1
+                print(f"  خطا [{product['id']}]: {exc}", file=sys.stderr)
+            if index % 50 == 0:
+                store.commit()
+                print(f"  پیشرفت: {index}/{len(products)}؛ ثبت: {saved}؛ خطا: {failed}")
+            if index < len(products):
+                time.sleep(args.delay)
+        store.commit()
+        print(f"پایان برداشت: {saved} ثبت، {missing} بدون saleCount، {failed} خطا.")
+        print("برای محاسبهٔ تفاضل، این دستور را در نوبت بعد دوباره اجرا کن.")
+    finally:
+        store.close()
+
+
+def cmd_sales_report(args) -> None:
+    """گزارش تفاوت شمارندهٔ فروش هر محصول از اولین تا آخرین برداشت."""
+    if not DB_PATH.exists():
+        print("دیتابیس موجود نیست.")
+        return
+    store = ProductStore(DB_PATH)
+    try:
+        rows = store.sale_deltas(args.city)
+        if not rows:
+            print("برای گزارش، دست‌کم دو برداشت saleCount از یک محصول لازم است.")
+            return
+        positive = [row for row in rows if row["delta"] >= 0]
+        resets = [row for row in rows if row["delta"] < 0]
+        print(f"محصولات قابل‌مقایسه: {len(rows)} | افزایش مجموع شمارنده‌ها: "
+              f"{sum(row['delta'] for row in positive):,} | کاهش/بازنشانی: {len(resets)}")
+        print("توجه: saleCount شمارندهٔ تجمعی سایت است، نه موجودی انبار؛ "
+              "تفاضل آن فروش ثبت‌شده در فاصلهٔ دو برداشت را نشان می‌دهد.")
+        for row in positive[:args.top]:
+            print(f"  +{row['delta']:,} | {row['title']} "
+                  f"({row['first_count']:,} → {row['last_count']:,})")
+        if args.csv:
+            args.csv.parent.mkdir(parents=True, exist_ok=True)
+            fields = ["product_id", "title", "first_count", "last_count",
+                      "delta", "first_at", "last_at", "samples"]
+            with args.csv.open("w", newline="", encoding="utf-8-sig") as output:
+                writer = csv.DictWriter(output, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows)
+            print(f"خروجی: {args.csv}")
     finally:
         store.close()
 
@@ -515,9 +599,16 @@ def cmd_daemon(args) -> None:
                          (f" | ⚠ {save_err} ذخیره نشد: "
                           f"{result.get('first_save_error', '')}") if save_err else "")
                 if args.csv:
-                    store.export_csv(args.csv, delimiter=args.csv_delimiter)
+                    try:
+                        store.export_csv(args.csv, delimiter=args.csv_delimiter)
+                    except OSError as exc:
+                        log.error("خروجی CSV نوشته نشد (%s). فایل قبلی حفظ شد؛ "
+                                  "اگر فایل در Excel باز است آن را ببندید.", exc)
                 if args.json:
-                    store.export_json(args.json)
+                    try:
+                        store.export_json(args.json)
+                    except OSError as exc:
+                        log.error("خروجی JSON نوشته نشد (%s). فایل قبلی حفظ شد.", exc)
                 if args.check_cart:
                     try:
                         print(f"تعداد اقلام سبد سرور: {Cart(client).counts()}")
@@ -573,9 +664,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="فقط این زیردسته‌ها")
     p.add_argument("--pages", type=int, default=None, help="حداکثر صفحات (پیش‌فرض: همه)")
     p.add_argument("--page-size", type=int, default=config.PAGE_SIZE_DEFAULT)
-    p.add_argument("--json", type=Path, default=None,
+    p.add_argument("--json", type=cli_path, default=None,
                    help="مسیر خروجی JSON (مثلاً data/products.json)")
-    p.add_argument("--csv", type=Path, default=None,
+    p.add_argument("--csv", type=cli_path, default=None,
                    help="مسیر خروجی CSV (مثلاً data/products.csv)")
     p.add_argument("--csv-delimiter", default=",",
                    help="جداکنندهٔ CSV (پیش‌فرض «,» — برای اکسل فارسی/اروپا «;»)")
@@ -589,13 +680,27 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_stats)
 
     p = sub.add_parser("export", help="تبدیل دیتابیس موجود به CSV/JSON")
-    p.add_argument("--csv", type=Path, default=None,
+    p.add_argument("--csv", type=cli_path, default=None,
                    help="مسیر خروجی CSV (مثلاً data/products.csv)")
     p.add_argument("--csv-delimiter", default=",",
                    help="جداکنندهٔ CSV (پیش‌فرض «,»)")
-    p.add_argument("--json", type=Path, default=None,
+    p.add_argument("--json", type=cli_path, default=None,
                    help="مسیر خروجی JSON")
     p.set_defaults(func=cmd_export)
+
+    p = sub.add_parser("sales-snapshot", help="ثبت شمارندهٔ فروش هر محصول برای مقایسهٔ زمانی")
+    p.add_argument("--city", type=int, default=1)
+    p.add_argument("--delay", type=float, default=0.5,
+                   help="مکث بین درخواست‌های جزئیات محصول (ثانیه)")
+    p.add_argument("--limit", type=int, default=None,
+                   help="فقط تعداد مشخصی محصول؛ مناسب آزمون")
+    p.set_defaults(func=cmd_sales_snapshot)
+
+    p = sub.add_parser("sales-report", help="تفاضل شمارندهٔ فروش هر محصول")
+    p.add_argument("--city", type=int, default=1)
+    p.add_argument("--top", type=int, default=20)
+    p.add_argument("--csv", type=cli_path, default=None)
+    p.set_defaults(func=cmd_sales_report)
 
     p = sub.add_parser("product", help="جزئیات یک محصول")
     p.add_argument("product_id")
@@ -690,9 +795,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="فاصلهٔ بین دوره‌ها به ثانیه (پیش‌فرض ۳۶۰۰ = هر ساعت)")
     p.add_argument("--once", action="store_true",
                    help="فقط یک دوره اجرا کن و خارج شو (مناسب cron/systemd-timer)")
-    p.add_argument("--csv", type=Path, default=None,
+    p.add_argument("--csv", type=cli_path, default=None,
                    help="بعد از هر دوره CSV بساز")
-    p.add_argument("--json", type=Path, default=None,
+    p.add_argument("--json", type=cli_path, default=None,
                    help="بعد از هر دوره JSON بساز")
     p.add_argument("--csv-delimiter", default=",")
     p.add_argument("--check-cart", action="store_true",
